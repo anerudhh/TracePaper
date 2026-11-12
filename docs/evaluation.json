@@ -1,0 +1,30 @@
+{
+  "dataset": "3 synthetic labeled questions with 10,000 synthetic distractor documents; not a research QA benchmark",
+  "papers": 10003,
+  "questions": 3,
+  "recall_at_6": 1.0,
+  "mrr": 1.0,
+  "retrieval_latency_median_ms": 0.99,
+  "citation_correctness": "not measured; requires claim-support labels",
+  "live_generation": "not tested; no provider key configured",
+  "results": [
+    {
+      "question": "How does photosynthesis use light?",
+      "expected_paper": "plants",
+      "expected_page": 1,
+      "rank": 1
+    },
+    {
+      "question": "What is citation correctness?",
+      "expected_paper": "citations",
+      "expected_page": 2,
+      "rank": 1
+    },
+    {
+      "question": "How does BM25 rank documents?",
+      "expected_paper": "retrieval",
+      "expected_page": 3,
+      "rank": 1
+    }
+  ]
+}

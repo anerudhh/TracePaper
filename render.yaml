@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tracepaper
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: TRACEPAPER_DATA
+        value: /data
+      - key: TRACEPAPER_PASSWORD
+        generateValue: true
+    disk:
+      name: research-library
+      mountPath: /data
+      sizeGB: 10

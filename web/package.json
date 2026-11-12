@@ -1,0 +1,27 @@
+{
+  "name": "tracepaper",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test:e2e": "playwright test",
+    "format": "prettier --write src vite.config.ts playwright.config.ts e2e",
+    "format:check": "prettier --check src vite.config.ts playwright.config.ts e2e"
+  },
+  "dependencies": {
+    "lucide-react": "0.468.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.9",
+    "@vitejs/plugin-react": "5.0.2",
+    "prettier": "3.6.2",
+    "typescript": "5.9.2",
+    "vite": "7.3.8"
+  }
+}

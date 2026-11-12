@@ -1,0 +1,50 @@
+name: Validate TracePaper
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements.lock
+          npm --prefix web ci
+      - name: Backend tests and retrieval fixtures
+        run: |
+          .venv/bin/python -m pytest -q
+          .venv/bin/python scripts/evaluate.py
+      - name: Build frontend
+        run: npm --prefix web run build
+      - name: Install browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser integration tests
+        working-directory: web
+        run: npx playwright test
+      - name: Audit frontend dependencies
+        working-directory: web
+        run: npm audit --audit-level=moderate
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit -r requirements.lock
+      - name: Build deployment image
+        run: docker build -t tracepaper:ci .
