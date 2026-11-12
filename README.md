@@ -46,10 +46,10 @@ This provides separate per-tab credentials, **not user accounts or private per-u
 
 ## Deploy
 
-For the free Hugging Face + Supabase setup, follow [the free deployment guide](docs/free-deployment.md). You can add credentials in GitHub **Settings → Secrets and variables → Actions** and run **Actions → Deploy TracePaper**, without entering credentials in Codex environment settings. This mode keeps originals, passages, and history in Supabase; a sleeping or restarted container does not own the only copy. Local SQLite remains available for development and persistent-volume deployments. The Docker image runs as UID 1000 for Spaces compatibility.
+For free hosting, use [Render with the existing Supabase storage](docs/free-deployment.md#render-web-service-with-supabase). Confirm that the Free compute plan is available in your account before creating the service. The Blueprint explicitly requests `plan: free` and no paid disk. Supabase retains originals, passages, and history across container restarts. Hugging Face Docker Spaces rejected this account with HTTP 402/PRO required, so that route must not be represented as free. The older Hugging Face workflow remains a separate, manually invoked option for eligible accounts; it never purchases a subscription.
 
 
-`render.yaml` defines a single Docker web service with a persistent 10 GB disk and a generated library password. Connect this repository in Render and create a Blueprint, or use [Deploy to Render](https://render.com/deploy?repo=https://github.com/anerudhh/TracePaper). Review its paid service/disk pricing before deploying. No provider secret is needed at deployment; each visitor enters their own key in the app. Retrieve the generated library password from the provider's environment settings. Do not expose it in your resume or repository.
+`render.yaml` defines a single Docker web service on the Free compute plan, using Supabase for persistence and an owner-supplied workspace password. Connect this repository in Render and create a Blueprint, or use [Deploy to Render](https://render.com/deploy?repo=https://github.com/anerudhh/TracePaper). Confirm that the review screen shows Free and no paid disk before creating the service. No provider secret is needed at deployment; each visitor enters their own key in the app. Enter a workspace password in the hosting secret field. Do not expose it in your resume or repository.
 
 Alternatively:
 
@@ -60,7 +60,7 @@ docker run --rm -p 8000:8000 -v tracepaper-data:/data \
   -e TRACEPAPER_PASSWORD tracepaper
 ```
 
-Terminate HTTPS at your host or reverse proxy. Run **one application worker and one replica**: SQLite and the in-process ingestion queue share local disk. Files, index, and history live under `TRACEPAPER_DATA`. Back up the volume (including SQLite consistently using its backup API), restrict access, and do not use an ephemeral filesystem for deployed data. A public recruiter demo should use non-sensitive documents in a separate instance; do not share a personal library password. There is no anonymous read-only mode yet.
+Terminate HTTPS at your host or reverse proxy. Run **one application worker and one replica** for the ingestion coordinator. In local mode, SQLite, originals, and history live under `TRACEPAPER_DATA` and need a persistent volume plus backups. In Supabase mode, only temporary parser files use that local directory; originals, passages and history live in Supabase. Do not use local-mode SQLite on an ephemeral host for a durable library. A public recruiter demo should use non-sensitive documents in a separate instance; do not share a personal library password. There is no anonymous read-only mode yet.
 
 ### Optional OCR
 

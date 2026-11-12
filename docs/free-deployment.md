@@ -1,17 +1,33 @@
-# Free hosting: Hugging Face + Supabase
+# Hosting with Supabase persistence
 
-The site runs in a **Hugging Face Docker Space on CPU Basic**. Supabase holds its documents, indexed passages, upload status, deletion cleanup queue, and answer history. The container's local `/data` directory is a temporary parser workspace, not the source of truth in hosted mode. No GPU, paid Hugging Face volume, or plan upgrade is requested. Provider free-tier availability and quotas still apply; free accounts can sleep or pause when idle.
+Hugging Face rejected Docker Space creation for the selected account with **HTTP 402: a PRO subscription is required**. CPU Basic is therefore not a free route for this deployment. The helper does not purchase or upgrade any account. The Supabase schema and dedicated backend key were successfully created before hosting was rejected, so that setup can be reused.
 
-## Deploy using GitHub repository secrets (recommended)
+## Render web service with Supabase
+
+Render's current official web-service guidance describes a Free tier with sleep-on-idle and no persistent disks. Availability for a specific account must be confirmed in its Dashboard. The repository's `render.yaml` now explicitly requests **`plan: free`**, creates no Render database or disk, and uses Supabase for durable storage. Do not accept a paid plan if Free is unavailable to the account.
+
+1. Sign in to [Render](https://dashboard.render.com/) using GitHub.
+2. Open [Deploy TracePaper to Render](https://render.com/deploy?repo=https://github.com/anerudhh/TracePaper). Authorize access to this repository if prompted. Alternatively choose New → Web Service, select the repository, and choose Docker and the Free compute plan.
+3. Confirm the review shows a Free web service and **no paid persistent disk or other paid resource**. Stop if a paid plan is required.
+4. Supply `SUPABASE_SERVICE_ROLE_KEY` with the existing `tracepaper_backend` secret key from your Supabase project's API Keys settings. Keep it in Render's environment/secret field, never in chat or source. Set `TRACEPAPER_PASSWORD` to the chosen site password. The Blueprint supplies the Supabase URL and the remaining non-secret settings.
+5. Create the service and wait for it to build. Share its public `onrender.com` URL for external verification; the URL is not secret.
+
+No Render API token, Hugging Face token, or site-wide Gemini key is needed for this Dashboard route. Supabase already owns persistence; `/data` in the container is temporary parser workspace. Free-tier quotas and cold starts still apply. Shared workspace access remains password protected, and each visitor supplies their own AI key inside the app.
+
+## Hugging Face alternative (account eligibility required)
+
+The files below remain useful only if the account is eligible to host Docker Spaces. A CPU Basic identifier does not establish that the overall hosting route is free; the selected account received a PRO requirement. Do not rerun this route expecting it to bypass the paywall.
+
+## Hugging Face deployment using GitHub repository secrets
 
 No Codex environment-settings fields are required for this route.
 
 1. Open [TracePaper repository secrets](https://github.com/anerudhh/TracePaper/settings/secrets/actions).
 2. Click **New repository secret** three times, adding `HF_TOKEN` (a Hugging Face write token), `SUPABASE_ACCESS_TOKEN` (a Supabase account access token), and `TRACEPAPER_PASSWORD` (your chosen site password). Store values there, not in chat or source.
 3. Open **Actions → Deploy TracePaper → Run workflow**, select `main`, and run it. The workflow uses the supplied Hugging Face account and Supabase URL by default. Optional repository variables `HF_NAMESPACE` and `SUPABASE_URL` override those targets.
-4. The workflow installs the app-scoped Supabase schema, uploads the free CPU Space, waits for its build, verifies password protection/upload/retrieval/PDF citations/history, restarts the Space, and requires a new process ID before checking persistence. It removes its own uniquely named sample. A successful run publishes a deployment summary with the Space link. No model call is made.
+4. The workflow installs the app-scoped Supabase schema, uploads the CPU Space (if the account is eligible), waits for its build, verifies password protection/upload/retrieval/PDF citations/history, restarts the Space, and requires a new process ID before checking persistence. It removes its own uniquely named sample. A successful run publishes a deployment summary with the Space link. No model call is made.
 
-Only a manual run on `main` can execute this workflow; pull requests cannot trigger its deployment job. It does not request paid hardware or volumes. The repository needs GitHub Actions enabled and sufficient runner quota. If a workflow step fails, it does not report deployment success.
+Only a manual run on `main` can execute this workflow; pull requests cannot trigger its deployment job. It does not request paid hardware or volumes or upgrade an account; it stops when the provider rejects account eligibility. The repository needs GitHub Actions enabled and sufficient runner quota. If a workflow step fails, it does not report deployment success.
 
 ## Secure deployment credentials for the CLI alternative
 

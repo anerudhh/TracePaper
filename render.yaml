@@ -1,15 +1,23 @@
+# Confirm the Free compute plan is available to your Render account before creating.
+# Persistence is provided by the existing Supabase project, not a paid Render disk.
 services:
   - type: web
     name: tracepaper
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /api/health
     envVars:
       - key: TRACEPAPER_DATA
         value: /data
+      - key: TRACEPAPER_STORAGE
+        value: supabase
+      - key: SUPABASE_URL
+        value: https://rmsulvaudvvydhjbhers.supabase.co
+      - key: SUPABASE_BUCKET
+        value: tracepaper
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: TRACEPAPER_PASSWORD
-        generateValue: true
-    disk:
-      name: research-library
-      mountPath: /data
-      sizeGB: 10
+        sync: false
+      - key: TRACEPAPER_REQUIRE_PASSWORD
+        value: '1'

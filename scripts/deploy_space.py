@@ -1,4 +1,7 @@
-"""Deploy the committed/staged app to free Hugging Face CPU hosting and Supabase.
+"""Deploy the committed/staged app to Hugging Face CPU hosting and Supabase.
+
+Docker CPU Spaces may require a PRO subscription. This helper never upgrades the
+account or purchases a plan; use the Render route when free hosting is required.
 
 Tokens are read only from process environment. No secret values are printed or
 written to disk. The Supabase backend key is retained only in memory and sent to
@@ -191,7 +194,7 @@ def deploy(repo_id, url, api, client, files, password):
             "cpu-basic",
         ) or runtime.requested_hardware not in (None, "cpu-basic"):
             raise RuntimeError(
-                "The existing Space is not on free CPU hardware. Choose a free CPU Space before deployment."
+                "The existing Space is not on CPU Basic hardware. Choose a CPU Basic Space before deployment."
             )
         if getattr(info, "sdk", "docker") != "docker":
             raise RuntimeError(

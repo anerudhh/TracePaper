@@ -34,3 +34,9 @@ The two new live-verifier unit tests pass. The latest local suite reports 35 pas
 ## Read-only migration regression
 
 A hosted deployment reported PostgreSQL `25006: cannot execute CREATE TABLE in a read-only transaction`. The migration now uses `BEGIN READ WRITE` instead of inheriting a session's default transaction mode. A real PostgreSQL regression first reproduces the failure with `default_transaction_read_only=on`, then applies the full updated migration successfully under that same default. The 14 storage/deployment/verifier tests passed. The hosted deployment still needs a fresh workflow run to validate this fix against the user's project; no global database settings were changed.
+
+## Hosting eligibility correction
+
+The actual GitHub-hosted run successfully authenticated, installed the Supabase schema/private bucket and created the dedicated backend key, then Hugging Face rejected Docker Space creation with HTTP 402 and an explicit PRO requirement. This supersedes earlier assumptions that CPU Basic was available free for this account. No hosting subscription was purchased, and no successful public Space deployment is claimed.
+
+The Render Blueprint now requests `plan: free`, no Render disk/database, and Supabase persistence. Its YAML structure and secret prompting were checked, and the 8 deployment/verifier tests pass. Render's official web-service guidance describes Free services, but account-specific availability and the provider's final Blueprint validation must be confirmed in the Dashboard before creation. No Render website has been deployed or externally verified yet.
