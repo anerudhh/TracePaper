@@ -111,3 +111,103 @@ def test_deployment_manifest_excludes_secrets_uploads_and_caches(tmp_path, monke
         lambda *a, **kw: "\0".join(required + sensitive).encode(),
     )
     assert set(deploy_space.deployment_files()) == set(required)
+
+
+def test_migration_failure_identifies_stage_and_redacts_provider_details(
+    tmp_path, monkeypatch
+):
+    import os
+
+    (tmp_path / "supabase/migrations").mkdir(parents=True)
+    (tmp_path / "supabase/migrations/001_tracepaper.sql").write_text("select 1;")
+    monkeypatch.setattr(deploy_space, "ROOT", tmp_path)
+    monkeypatch.setenv("SUPABASE_ACCESS_TOKEN", "test-supabase-sensitive-token")
+    monkeypatch.setenv("HF_TOKEN", "test-huggingface-sensitive-token")
+
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(
+                400,
+                json={
+                    "message": "ERROR 42501: permission denied. test-supabase-sensitive-token test-huggingface-sensitive-token test-private-password eyJabc.def.ghi",
+                    "hint": "Check the project database privileges",
+                },
+            )
+        return httpx.Response(200, json={"status": "ACTIVE_HEALTHY"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(deploy_space.DeploymentFailure) as failure:
+            deploy_space.deploy(
+                "owner/tracepaper",
+                "https://" + "a" * 20 + ".supabase.co",
+                MagicMock(),
+                client,
+                [],
+                "test-private-password",
+            )
+    message = str(failure.value)
+    assert "Install Supabase schema and private bucket" in message
+    assert "HTTP 400" in message and "permission denied" in message
+    for secret in (
+        os.environ["SUPABASE_ACCESS_TOKEN"],
+        os.environ["HF_TOKEN"],
+        "test-private-password",
+        "eyJabc.def.ghi",
+    ):
+        assert secret not in message
+
+
+def test_paused_project_is_reported_before_migration(tmp_path, monkeypatch):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"status": "INACTIVE"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(
+            deploy_space.DeploymentFailure, match="Resume it in the Supabase dashboard"
+        ):
+            deploy_space.deploy(
+                "owner/tracepaper",
+                "https://" + "a" * 20 + ".supabase.co",
+                MagicMock(),
+                client,
+                [],
+                "test-private-password",
+            )
+
+
+def test_runtime_failure_redacts_newly_obtained_storage_key(tmp_path, monkeypatch):
+    (tmp_path / "supabase/migrations").mkdir(parents=True)
+    (tmp_path / "supabase/migrations/001_tracepaper.sql").write_text("select 1;")
+    monkeypatch.setattr(deploy_space, "ROOT", tmp_path)
+
+    def handler(request):
+        if request.url.path.endswith("/api-keys"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"name": "tracepaper_backend", "api_key": "test-new-storage-secret"}
+                ],
+            )
+        return httpx.Response(200, json={})
+
+    api = MagicMock()
+    api.repo_info.return_value.sdk = "docker"
+    api.get_space_runtime.return_value.hardware = "cpu-basic"
+    api.get_space_runtime.return_value.requested_hardware = "cpu-basic"
+    api.add_space_secret.side_effect = RuntimeError(
+        "Rejected test-new-storage-secret test-private-password"
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(deploy_space.DeploymentFailure) as failure:
+            deploy_space.deploy(
+                "owner/tracepaper",
+                "https://" + "a" * 20 + ".supabase.co",
+                api,
+                client,
+                [],
+                "test-private-password",
+            )
+    assert "Configure Hugging Face runtime" in str(failure.value)
+    assert "test-new-storage-secret" not in str(failure.value)
+    assert "test-private-password" not in str(failure.value)

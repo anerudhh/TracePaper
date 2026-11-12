@@ -60,98 +60,186 @@ def prepare_folder(target, files):
     shutil.copyfile(ROOT / "deploy/SPACE_README.md", target / "README.md")
 
 
+class DeploymentFailure(RuntimeError):
+    """An actionable, credential-redacted provider failure."""
+
+
+def safe_provider_error(error, secret_values=()):
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    details = []
+    if response is not None:
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                for field in ("message", "error", "code", "detail", "hint"):
+                    value = body.get(field)
+                    if isinstance(value, str):
+                        details.append(field + ": " + value)
+                    elif isinstance(value, dict) and isinstance(
+                        value.get("message"), str
+                    ):
+                        details.append(field + ": " + value["message"])
+        except (ValueError, TypeError):
+            pass
+    elif isinstance(error, (RuntimeError, ValueError)):
+        details.append(str(error))
+    message = "; ".join(details) or "Provider returned no structured error detail."
+    # Compare with values only for redaction; never enumerate the environment in output.
+    values = list(secret_values) + [
+        os.getenv(n)
+        for n in (
+            "HF_TOKEN",
+            "SUPABASE_ACCESS_TOKEN",
+            "TRACEPAPER_PASSWORD",
+            "SUPABASE_SERVICE_ROLE_KEY",
+        )
+    ]
+    for value in sorted((v for v in values if v), key=len, reverse=True):
+        message = message.replace(value, "[REDACTED]")
+    message = re.sub(r"(?i)Bearer\s+[^\s\"'<>]+", "Bearer [REDACTED]", message)
+    message = re.sub(
+        r"(?:hf_|sbp_|sb_secret_|sb_publishable_)[A-Za-z0-9_-]+", "[REDACTED]", message
+    )
+    message = re.sub(
+        r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED JWT]", message
+    )
+    message = " ".join(message.split())[:1200]
+    return (f"HTTP {status}: " if status else type(error).__name__ + ": ") + message
+
+
 def deploy(repo_id, url, api, client, files, password):
-    ref = project_ref(url)
-    api.whoami()  # Fail before any mutation if hosting authentication is unavailable.
-    response = client.get(f"https://api.supabase.com/v1/projects/{ref}")
-    response.raise_for_status()
-    # Only app-prefixed tables/functions and the tracepaper bucket are touched.
-    response = client.post(
-        f"https://api.supabase.com/v1/projects/{ref}/database/query",
-        json={
-            "query": (ROOT / "supabase/migrations/001_tracepaper.sql").read_text(),
-            "read_only": False,
-        },
-    )
-    response.raise_for_status()
-    print("Supabase schema and private document bucket installed.")
-    response = client.get(
-        f"https://api.supabase.com/v1/projects/{ref}/api-keys",
-        params={"reveal": "true"},
-    )
-    response.raise_for_status()
-    key = next(
-        (
-            k.get("api_key")
-            for k in response.json()
-            if k.get("name") == "tracepaper_backend" and k.get("api_key")
-        ),
-        None,
-    )
-    if not key:
+    stage = "Validate deployment target"
+    secret_values = [password]
+    try:
+        ref = project_ref(url)
+        stage = "Authenticate Hugging Face"
+        print("Deployment step: " + stage, flush=True)
+        api.whoami()  # Fail before any mutation if hosting authentication is unavailable.
+        stage = "Read Supabase project"
+        print("Deployment step: " + stage, flush=True)
+        response = client.get(f"https://api.supabase.com/v1/projects/{ref}")
+        response.raise_for_status()
+        project_status = response.json().get("status")
+        if isinstance(project_status, str) and re.fullmatch(
+            r"[A-Z_]{2,50}", project_status
+        ):
+            print("Supabase project status: " + project_status, flush=True)
+        if project_status in ("INACTIVE", "PAUSED", "GOING_DOWN", "RESTORING"):
+            raise RuntimeError(
+                "The Supabase project is paused or not ready. Resume it in the Supabase dashboard and wait until it is healthy, then run deployment again."
+            )
+        stage = "Install Supabase schema and private bucket"
+        print("Deployment step: " + stage, flush=True)
+        # Only app-prefixed tables/functions and the tracepaper bucket are touched.
         response = client.post(
-            f"https://api.supabase.com/v1/projects/{ref}/api-keys",
-            params={"reveal": "true"},
+            f"https://api.supabase.com/v1/projects/{ref}/database/query",
             json={
-                "type": "secret",
-                "name": "tracepaper_backend",
-                "description": "TracePaper private storage backend",
-                "secret_jwt_template": {"role": "service_role"},
+                "query": (ROOT / "supabase/migrations/001_tracepaper.sql").read_text(),
+                "read_only": False,
             },
         )
         response.raise_for_status()
-        key = response.json().get("api_key")
-    if not key:
-        raise RuntimeError("A dedicated backend storage key was not returned.")
-    # No GPU, paid hardware, or persistent Hugging Face disk is requested.
-    api.create_repo(
-        repo_id=repo_id,
-        repo_type="space",
-        space_sdk="docker",
-        private=False,
-        exist_ok=True,
-    )
-    info = api.repo_info(repo_id=repo_id, repo_type="space")
-    runtime = api.get_space_runtime(repo_id=repo_id)
-    if runtime.hardware not in (
-        None,
-        "cpu-basic",
-    ) or runtime.requested_hardware not in (None, "cpu-basic"):
-        raise RuntimeError(
-            "The existing Space is not on free CPU hardware. Choose a free CPU Space before deployment."
+        print("Supabase schema and private document bucket installed.")
+        stage = "Read Supabase backend key metadata"
+        print("Deployment step: " + stage, flush=True)
+        response = client.get(
+            f"https://api.supabase.com/v1/projects/{ref}/api-keys",
+            params={"reveal": "true"},
         )
-    if getattr(info, "sdk", "docker") != "docker":
-        raise RuntimeError(
-            "Existing Space does not use Docker; refusing to overwrite it."
+        response.raise_for_status()
+        key = next(
+            (
+                k.get("api_key")
+                for k in response.json()
+                if k.get("name") == "tracepaper_backend" and k.get("api_key")
+            ),
+            None,
         )
-    for name, value in {
-        "TRACEPAPER_STORAGE": "supabase",
-        "SUPABASE_URL": url.rstrip("/"),
-        "SUPABASE_BUCKET": "tracepaper",
-        "TRACEPAPER_DATA": "/data",
-        "PORT": "8000",
-        "TRACEPAPER_REQUIRE_PASSWORD": "1",
-    }.items():
-        api.add_space_variable(repo_id=repo_id, key=name, value=value)
-    api.add_space_secret(repo_id=repo_id, key="SUPABASE_SERVICE_ROLE_KEY", value=key)
-    if password:
-        api.add_space_secret(repo_id=repo_id, key="TRACEPAPER_PASSWORD", value=password)
-    with tempfile.TemporaryDirectory(prefix="tracepaper-space-source-") as folder:
-        prepare_folder(Path(folder), files)
-        api.upload_folder(
+        if not key:
+            stage = "Create dedicated Supabase backend key"
+            print("Deployment step: " + stage, flush=True)
+            response = client.post(
+                f"https://api.supabase.com/v1/projects/{ref}/api-keys",
+                params={"reveal": "true"},
+                json={
+                    "type": "secret",
+                    "name": "tracepaper_backend",
+                    "description": "TracePaper private storage backend",
+                    "secret_jwt_template": {"role": "service_role"},
+                },
+            )
+            response.raise_for_status()
+            key = response.json().get("api_key")
+        if not key:
+            raise RuntimeError("A dedicated backend storage key was not returned.")
+        secret_values.append(key)
+        stage = "Create or inspect Hugging Face Space"
+        print("Deployment step: " + stage, flush=True)
+        # No GPU, paid hardware, or persistent Hugging Face disk is requested.
+        api.create_repo(
             repo_id=repo_id,
             repo_type="space",
-            folder_path=folder,
-            commit_message="Deploy navy-and-white TracePaper with durable Supabase storage",
+            space_sdk="docker",
+            private=False,
+            exist_ok=True,
         )
-    print("Source uploaded: https://huggingface.co/spaces/" + repo_id)
-    print(
-        "Deployment is not verified until the Space is running and its HTTPS health/authenticated workflows pass."
-    )
-    if not password:
+        info = api.repo_info(repo_id=repo_id, repo_type="space")
+        runtime = api.get_space_runtime(repo_id=repo_id)
+        if runtime.hardware not in (
+            None,
+            "cpu-basic",
+        ) or runtime.requested_hardware not in (None, "cpu-basic"):
+            raise RuntimeError(
+                "The existing Space is not on free CPU hardware. Choose a free CPU Space before deployment."
+            )
+        if getattr(info, "sdk", "docker") != "docker":
+            raise RuntimeError(
+                "Existing Space does not use Docker; refusing to overwrite it."
+            )
+        stage = "Configure Hugging Face runtime"
+        print("Deployment step: " + stage, flush=True)
+        for name, value in {
+            "TRACEPAPER_STORAGE": "supabase",
+            "SUPABASE_URL": url.rstrip("/"),
+            "SUPABASE_BUCKET": "tracepaper",
+            "TRACEPAPER_DATA": "/data",
+            "PORT": "8000",
+            "TRACEPAPER_REQUIRE_PASSWORD": "1",
+        }.items():
+            api.add_space_variable(repo_id=repo_id, key=name, value=value)
+        api.add_space_secret(
+            repo_id=repo_id, key="SUPABASE_SERVICE_ROLE_KEY", value=key
+        )
+        if password:
+            api.add_space_secret(
+                repo_id=repo_id, key="TRACEPAPER_PASSWORD", value=password
+            )
+        stage = "Upload Space source"
+        print("Deployment step: " + stage, flush=True)
+        with tempfile.TemporaryDirectory(prefix="tracepaper-space-source-") as folder:
+            prepare_folder(Path(folder), files)
+            api.upload_folder(
+                repo_id=repo_id,
+                repo_type="space",
+                folder_path=folder,
+                commit_message="Deploy navy-and-white TracePaper with durable Supabase storage",
+            )
+        print("Source uploaded: https://huggingface.co/spaces/" + repo_id)
         print(
-            "Set TRACEPAPER_PASSWORD in the Space Settings secrets before the backend can start."
+            "Deployment is not verified until the Space is running and its HTTPS health/authenticated workflows pass."
         )
+        if not password:
+            print(
+                "Set TRACEPAPER_PASSWORD in the Space Settings secrets before the backend can start."
+            )
+    except Exception as error:
+        raise DeploymentFailure(
+            "Deployment failed at: "
+            + stage
+            + "\n"
+            + safe_provider_error(error, secret_values)
+        ) from None
 
 
 def main():
@@ -208,6 +296,9 @@ if __name__ == "__main__":
         main()
     except (KeyboardInterrupt, SystemExit):
         raise
+    except DeploymentFailure as error:
+        print(str(error), flush=True)
+        raise SystemExit(1) from None
     except Exception as error:
         status = getattr(getattr(error, "response", None), "status_code", None)
         print(

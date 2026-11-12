@@ -56,3 +56,9 @@ This is one password-protected research workspace; people who share its password
 Hosted retrieval uses PostgreSQL full-text indexing and relevance ranking; local mode retains SQLite FTS5/BM25. Both are lexical search, not semantic embeddings. Cloud passages are inserted in bounded batches and become searchable only after indexing completes. Interrupted indexing is recovered at startup. Interrupted uploads become failed entries that can be removed and reuploaded. A durable cleanup queue retries remote-object deletions at startup if the storage API was unavailable when a document was removed.
 
 The fixed 50 MB upload and parser resource limits still apply. Supabase database, storage, and egress quotas and Hugging Face sleep/build limits bound the free demo; the app does not claim unlimited papers. PostgreSQL/RPC semantics are tested against real local PostgreSQL with an object-storage HTTP contract double. Those tests do not establish that a hosted Supabase account or public Space is configured correctly; live checks remain separate.
+
+## Diagnosing a deployment failure
+
+The helper prints a `Deployment step:` label before each provider operation. On failure it prints the stage, HTTP status, and selected provider error fields with known credentials and token formats redacted. A paused Supabase project is reported before running the migration; resume it in the dashboard and wait for it to be healthy.
+
+After a code fix, start **Actions → Deploy TracePaper → Run workflow → main**. **Re-run jobs** on an older run uses its original commit and will not pick up fixes pushed afterward. If a run still fails, share the named failed deployment step and redacted provider error text, never the secret values.
