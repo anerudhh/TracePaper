@@ -11,6 +11,7 @@ from backend import main
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DATA", tmp_path)
+    monkeypatch.setenv("TRACEPAPER_STORAGE", "local")
     for name in (
         "OPENAI_API_KEY",
         "TRACEPAPER_GEMINI_KEY",

@@ -8,3 +8,4 @@ web/test-results
 test-results
 __pycache__
 .pytest_cache
+.deploy-venv

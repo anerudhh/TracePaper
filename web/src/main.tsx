@@ -16,6 +16,7 @@ import {
   ArrowDownToLine,
   Loader2,
   LogOut,
+  Settings2,
 } from "lucide-react";
 import "./style.css";
 import KeySettings, { type Credential } from "./KeySettings";
@@ -49,6 +50,7 @@ type Answer = {
   estimated_cost_usd: number | null;
 };
 type Config = {
+  storage: "local" | "supabase";
   requires_user_key: boolean;
   models: Record<string, string>;
   ocr: boolean;
@@ -289,7 +291,7 @@ function App() {
               setMobile(false);
             }}
           >
-            <span className="settings-glyph">⚙</span> Response settings
+            <Settings2 size={17} /> Response settings
           </button>
         </nav>
         <button
@@ -865,7 +867,9 @@ function App() {
                       </span>
                       <button
                         className="icon"
-                        disabled={["queued", "indexing"].includes(p.status)}
+                        disabled={["uploading", "queued", "indexing"].includes(
+                          p.status,
+                        )}
                         aria-label={`Delete ${p.name}`}
                         onClick={() => setRemove(p)}
                       >
@@ -936,10 +940,13 @@ function App() {
                 <div>
                   <h3>Retrieval</h3>
                   <p>
-                    SQLite FTS5 with BM25 ranking, word stemming, overlapping
-                    passages, and up to six distinct source pages. Search stays
-                    on disk; it does not scan the full library into memory.
-                    Semantic embedding retrieval is not yet included.
+                    {config?.storage === "supabase"
+                      ? "PostgreSQL full-text search with relevance ranking"
+                      : "SQLite FTS5 with BM25 ranking"}
+                    , word stemming, overlapping passages, and up to six
+                    distinct source pages. Search stays on disk; it does not
+                    scan the full library into memory. Semantic embedding
+                    retrieval is not yet included.
                   </p>
                 </div>
                 <div>
@@ -1012,7 +1019,13 @@ function App() {
                 className="danger"
                 onClick={async () => {
                   try {
-                    await api("/papers/" + remove.id, { method: "DELETE" });
+                    const deletion = await api("/papers/" + remove.id, {
+                      method: "DELETE",
+                    });
+                    if (deletion.pending_cleanup)
+                      setNotice(
+                        "Document removed. Hosted file cleanup is pending and will retry on restart.",
+                      );
                     setSelected((s) => s.filter((id) => id !== remove.id));
                     setAnswer(null);
                     setSource(null);

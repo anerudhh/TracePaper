@@ -22,6 +22,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       TRACEPAPER_DATA: testData,
+      TRACEPAPER_STORAGE: "local",
       TRACEPAPER_PASSWORD: "",
       TRACEPAPER_OCR: "0",
     },

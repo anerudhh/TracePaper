@@ -12,7 +12,7 @@ COPY requirements.lock ./
 RUN --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then PIP_CERT=/run/secrets/proxy_ca pip install --no-cache-dir -r requirements.lock; else pip install --no-cache-dir -r requirements.lock; fi
 COPY backend/ ./backend/
 COPY --from=frontend /build/web/dist ./web/dist
-RUN chmod -R a+rX /app && useradd --uid 10001 --create-home app && mkdir /data && chown app:app /data
+RUN chmod -R a+rX /app && useradd --uid 1000 --create-home app && mkdir /data && chown app:app /data
 USER app
 ENV TRACEPAPER_DATA=/data PORT=8000
 EXPOSE 8000

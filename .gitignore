@@ -14,3 +14,4 @@ playwright-report/
 .ruff_cache/
 .coverage
 *.log
+.deploy-venv/

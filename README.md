@@ -1,6 +1,6 @@
 # TracePaper
 
-A personal research workspace for asking questions across documents and following the evidence back to its source. React + TypeScript, FastAPI, SQLite FTS5, and optional Gemini or OpenAI generation.
+A personal research workspace for asking questions across documents and following the evidence back to its source. React + TypeScript, FastAPI, SQLite FTS5, and optional Gemini or OpenAI generation. Dark navy navigation and white reading surfaces.
 
 ![Research desk](docs/prototype-desktop.png)
 
@@ -46,6 +46,9 @@ This provides separate per-tab credentials, **not user accounts or private per-u
 
 ## Deploy
 
+For the free Hugging Face + Supabase setup, follow [the free deployment guide](docs/free-deployment.md). This mode keeps originals, passages, and history in Supabase; a sleeping or restarted container does not own the only copy. Local SQLite remains available for development and persistent-volume deployments. The Docker image runs as UID 1000 for Spaces compatibility.
+
+
 `render.yaml` defines a single Docker web service with a persistent 10 GB disk and a generated library password. Connect this repository in Render and create a Blueprint, or use [Deploy to Render](https://render.com/deploy?repo=https://github.com/anerudhh/TracePaper). Review its paid service/disk pricing before deploying. No provider secret is needed at deployment; each visitor enters their own key in the app. Retrieve the generated library password from the provider's environment settings. Do not expose it in your resume or repository.
 
 Alternatively:
@@ -76,7 +79,7 @@ Browser tests start a separate server on port 8123 with a new temporary library,
 
 ## Architecture and honest limits
 
-The browser calls same-origin `/api` endpoints. An ingestion coordinator starts one isolated parser subprocess at a time and writes overlapping 230-word passages (180-word stride) to SQLite. Each parser is limited to 256 MiB address space, 120 seconds of CPU time, and 180 seconds wall time; failures are recorded without taking down the API. Worker processes receive only basic runtime/OCR settings and no provider credentials. FTS5 ranks matching chunks with BM25, selecting up to six distinct pages or sections. A restart recovers queued/interrupted jobs. The selected provider (Gemini or OpenAI) receives only the question and selected retrieved passages, not the entire file; without a visitor key, no provider request is made. Generated claim IDs are validated against retrieved passages. Valid IDs do **not** establish factual support; check each cited passage.
+The browser calls same-origin `/api` endpoints. `TRACEPAPER_STORAGE=local` (default) uses SQLite/local files; `TRACEPAPER_STORAGE=supabase` uses private Supabase object storage and service-only PostgreSQL RPCs. Hosted mode fails if its credentials/schema are missing; it does not silently fall back to ephemeral storage. An ingestion coordinator starts one isolated parser subprocess at a time and writes overlapping 230-word passages (180-word stride) to SQLite. Each parser is limited to 256 MiB address space, 120 seconds of CPU time, and 180 seconds wall time; failures are recorded without taking down the API. Worker processes receive only basic runtime/OCR settings and no provider credentials. FTS5 ranks matching chunks with BM25, selecting up to six distinct pages or sections. A restart recovers queued/interrupted jobs. The selected provider (Gemini or OpenAI) receives only the question and selected retrieved passages, not the entire file; without a visitor key, no provider request is made. Generated claim IDs are validated against retrieved passages. Valid IDs do **not** establish factual support; check each cited passage.
 
 The index and paginated library avoid full-library memory scans. This is not yet a distributed million-paper system: indexing jobs share one host, uploads are limited to 50 MB and PDFs to 2,000 pages each, extracted text is limited to 20 million characters per document, and semantic embeddings/reranking are not implemented. BM25 can miss paraphrases and can return weak keyword matches; extractive mode presents these as passages, not asserted answers. There is no measured citation correctness score, production load-test claim, or published research benchmark. Test fixtures demonstrate mechanics only.
 

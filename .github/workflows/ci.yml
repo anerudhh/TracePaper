@@ -27,7 +27,18 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements.lock
           npm --prefix web ci
+      - name: Prepare PostgreSQL storage integration
+        run: |
+          docker run -d --name tracepaper-pg-test -e POSTGRES_PASSWORD=ci-test-only postgres:16-alpine
+          for attempt in $(seq 1 30); do
+            if docker exec tracepaper-pg-test pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          docker exec -i tracepaper-pg-test psql -U postgres -v ON_ERROR_STOP=1 < tests/supabase_roles.sql
+          docker exec -i tracepaper-pg-test psql -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/001_tracepaper.sql
       - name: Backend tests and retrieval fixtures
+        env:
+          TRACEPAPER_TEST_POSTGRES_CONTAINER: tracepaper-pg-test
         run: |
           .venv/bin/python -m pytest -q
           .venv/bin/python scripts/evaluate.py

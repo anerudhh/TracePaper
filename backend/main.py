@@ -17,10 +17,12 @@ from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from backend.limits import RequestSizeLimit
+from backend.store import LocalStore, SupabaseStore
+from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.getenv("TRACEPAPER_DATA", str(ROOT / "data")))
@@ -43,7 +45,24 @@ def db(data_dir=None):
         conn.close()
 
 
+def get_store(data_dir=None):
+    backend = os.getenv("TRACEPAPER_STORAGE", "local")
+    if backend == "supabase":
+        return SupabaseStore(data_dir or DATA)
+    if backend != "local":
+        raise RuntimeError("TRACEPAPER_STORAGE must be local or supabase.")
+    return LocalStore(lambda: db(data_dir), data_dir or DATA)
+
+
 def initialize():
+    store = get_store()
+    if not store.hosted:
+        return initialize_local()
+    for pid in store.recover():
+        POOL.submit(index_paper, pid, str(DATA), os.getenv("TRACEPAPER_OCR") == "1")
+
+
+def initialize_local():
     with db() as c:
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript("""
@@ -68,22 +87,29 @@ def paper_path(pid, kind):
 
 
 def index_paper(pid, data_dir, ocr):
-    # PyMuPDF does not support concurrent use from Python threads. Each document
-    # gets its own process; this pool coordinates one such worker.
-    env = {
-        key: os.environ[key]
-        for key in ("PATH", "TESSDATA_PREFIX", "LANG", "LC_ALL", "LD_LIBRARY_PATH")
-        if key in os.environ
-    }
-    env["TRACEPAPER_DATA"] = str(data_dir)
+    store = get_store(data_dir)
+    output = Path(data_dir) / (pid + ".parsed.json")
+    path = None
     try:
-        result = subprocess.run(
+        row = store.get(pid)
+        if not row:
+            return
+        store.status(pid, "indexing")
+        path = store.ensure_file(row)
+        # No database or API credentials are passed into the untrusted-file parser.
+        env = {
+            k: os.environ[k]
+            for k in ("PATH", "TESSDATA_PREFIX", "LANG", "LC_ALL", "LD_LIBRARY_PATH")
+            if k in os.environ
+        }
+        process = subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "backend.ingest",
-                pid,
-                data_dir,
+                str(path),
+                str(output),
+                row["kind"],
                 "1" if ocr else "0",
             ],
             cwd=ROOT,
@@ -92,29 +118,43 @@ def index_paper(pid, data_dir, ocr):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        if result.returncode:
-            raise RuntimeError(
-                "The document exceeded processing limits or its parser could not complete."
-            )
+        if (
+            process.returncode
+            or not output.exists()
+            or output.stat().st_size > 100 * 1024 * 1024
+        ):
+            raise ValueError("Document parser exceeded its processing limits.")
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        if payload.get("error"):
+            store.status(pid, "failed", payload["error"])
+        else:
+            store.index(pid, payload["pages"])
     except subprocess.TimeoutExpired:
-        with db(data_dir) as c:
-            c.execute(
-                "UPDATE papers SET status='failed',error=? WHERE id=?",
-                ("Processing exceeded 180 seconds. Split the document and retry.", pid),
-            )
+        store.status(
+            pid,
+            "failed",
+            "Processing exceeded 180 seconds. Split the document and retry.",
+        )
     except Exception:
-        with db(data_dir) as c:
-            c.execute(
-                "UPDATE papers SET status='failed',error=? WHERE id=?",
-                (
-                    "The document could not be processed within resource limits. Try a smaller file.",
-                    pid,
-                ),
-            )
+        store.status(
+            pid,
+            "failed",
+            "The document could not be processed or hosted storage is unavailable. Try again with a smaller file.",
+        )
+    finally:
+        output.unlink(missing_ok=True)
+        if store.hosted and path:
+            path.unlink(missing_ok=True)
 
 
 @asynccontextmanager
 async def lifespan(app):
+    if os.getenv("TRACEPAPER_REQUIRE_PASSWORD") == "1" and not os.getenv(
+        "TRACEPAPER_PASSWORD"
+    ):
+        raise RuntimeError(
+            "Set TRACEPAPER_PASSWORD in the hosting secrets before starting this private workspace."
+        )
     initialize()
     yield
 
@@ -185,9 +225,8 @@ def logout():
 @app.get("/api/health")
 def health():
     try:
-        with db() as c:
-            c.execute("SELECT id FROM papers LIMIT 1").fetchone()
-    except sqlite3.Error:
+        get_store().health()
+    except (sqlite3.Error, HTTPException, RuntimeError):
         return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ok"}
 
@@ -206,6 +245,7 @@ def config():
     # Server credentials are intentionally ignored. Each request brings its own key.
     return {
         "requires_user_key": True,
+        "storage": "supabase" if get_store().hosted else "local",
         "models": {p: generation_model(p) for p in ("gemini", "openai")},
         "ocr": os.getenv("TRACEPAPER_OCR") == "1",
         "private": bool(os.getenv("TRACEPAPER_PASSWORD")),
@@ -214,21 +254,30 @@ def config():
 
 @app.get("/api/papers")
 def papers(q: str = "", limit: int = 50, offset: int = 0):
-    with db() as c:
-        term = "%" + q + "%"
-        rows = c.execute(
-            "SELECT * FROM papers WHERE name LIKE ? ORDER BY created DESC,id DESC LIMIT ? OFFSET ?",
-            (term, max(1, min(limit, 100)), max(0, offset)),
-        ).fetchall()
-        total = c.execute(
-            "SELECT count(*) FROM papers WHERE name LIKE ?", (term,)
-        ).fetchone()[0]
-        stats = dict(
-            c.execute(
-                "SELECT count(*) papers, coalesce(sum(pages),0) pages, sum(status='ready') ready FROM papers"
-            ).fetchone()
+    return get_store().list(q, max(1, min(limit, 100)), max(0, offset))
+
+
+def finalize_upload(pid, name, kind, size, digest, path):
+    store = get_store()
+    row = store.create(
+        {"id": pid, "name": name, "kind": kind, "size": size, "digest": digest}
+    )
+    if row["id"] != pid:
+        path.unlink(missing_ok=True)
+        return {"id": row["id"], "duplicate": True}
+    try:
+        store.put_file(row, path)
+        if store.hosted:
+            store.status(pid, "queued")
+    except Exception:
+        store.status(
+            pid,
+            "failed",
+            "Upload to hosted storage failed. Remove this entry and upload again.",
         )
-        return {"items": [dict(r) for r in rows], "total": total, "stats": stats}
+        raise
+    POOL.submit(index_paper, pid, str(DATA), os.getenv("TRACEPAPER_OCR") == "1")
+    return {"id": pid, "duplicate": False}
 
 
 @app.post("/api/papers", status_code=202)
@@ -239,8 +288,7 @@ async def upload(file: UploadFile):
         raise HTTPException(415, "Choose a PDF or DOCX file.")
     pid = uuid.uuid4().hex
     path = paper_path(pid, kind)
-    size = 0
-    digest = hashlib.sha256()
+    size, digest = 0, hashlib.sha256()
     try:
         with path.open("wb") as out:
             while chunk := await file.read(1024 * 1024):
@@ -251,57 +299,28 @@ async def upload(file: UploadFile):
                 out.write(chunk)
         if not size:
             raise HTTPException(400, "This file is empty.")
-        with db() as c:
-            existing = c.execute(
-                "SELECT id FROM papers WHERE digest=?", (digest.hexdigest(),)
-            ).fetchone()
-            if existing:
-                path.unlink(missing_ok=True)
-                return {"id": existing["id"], "duplicate": True}
-            c.execute(
-                "INSERT INTO papers(id,name,kind,size,digest,status) VALUES(?,?,?,?,?,?)",
-                (pid, name, kind, size, digest.hexdigest(), "queued"),
-            )
+        return await run_in_threadpool(
+            finalize_upload, pid, name, kind, size, digest.hexdigest(), path
+        )
     except Exception:
         path.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
-    POOL.submit(index_paper, pid, str(DATA), os.getenv("TRACEPAPER_OCR") == "1")
-    return {"id": pid, "duplicate": False}
 
 
 @app.get("/api/papers/{pid}/file")
-def get_file(pid: str):
-    with db() as c:
-        paper = c.execute("SELECT * FROM papers WHERE id=?", (pid,)).fetchone()
+def get_file(pid: str, request: Request):
+    store = get_store()
+    paper = store.get(pid)
     if not paper:
         raise HTTPException(404, "Paper not found.")
-    return FileResponse(
-        paper_path(pid, paper["kind"]),
-        media_type="application/pdf"
-        if paper["kind"] == "pdf"
-        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=paper["name"],
-        content_disposition_type="inline" if paper["kind"] == "pdf" else "attachment",
-    )
+    return store.file_response(paper, request)
 
 
 @app.delete("/api/papers/{pid}")
 def delete_paper(pid: str):
-    with db() as c:
-        row = c.execute("SELECT * FROM papers WHERE id=?", (pid,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Paper not found.")
-        if row["status"] in ("queued", "indexing"):
-            raise HTTPException(409, "Wait for indexing to finish before deleting.")
-        c.execute("DELETE FROM papers WHERE id=?", (pid,))
-        # Prior answers may contain passages from this document; remove those too.
-        for h in c.execute("SELECT id,result FROM history").fetchall():
-            if any(s["paper_id"] == pid for s in json.loads(h["result"])["sources"]):
-                c.execute("DELETE FROM history WHERE id=?", (h["id"],))
-    paper_path(pid, row["kind"]).unlink(missing_ok=True)
-    return {"ok": True}
+    return get_store().delete(pid)
 
 
 class Question(BaseModel):
@@ -320,17 +339,7 @@ def retrieve(question, paper_ids):
     )[:30]
     if not tokens:
         return []
-    expression = " OR ".join('"' + t + '"' for t in tokens)
-    scope = (
-        " AND p.id IN (" + ",".join("?" for _ in paper_ids) + ")" if paper_ids else ""
-    )
-    with db() as c:
-        hits = c.execute(
-            "SELECT ch.*,p.name,p.kind,bm25(search) rank FROM search JOIN chunks ch ON ch.id=search.rowid JOIN papers p ON p.id=ch.paper_id WHERE search MATCH ? AND p.status='ready'"
-            + scope
-            + " ORDER BY rank LIMIT 24",
-            [expression, *paper_ids],
-        ).fetchall()
+    hits = get_store().search(tokens, paper_ids)
     sources = []
     seen = set()
     for hit in hits:
@@ -492,32 +501,21 @@ def ask(body: Question, request: Request):
         "provider": provider if mode == "generated" else None,
         "model": model if mode == "generated" else None,
     }
-    with db() as c:
-        c.execute(
-            "INSERT INTO history(id,question,result) VALUES(?,?,?)",
-            (result["id"], body.question, json.dumps(result)),
-        )
+    get_store().save(result)
     return result
 
 
 @app.get("/api/history")
 def history():
-    with db() as c:
-        return [
-            dict(r)
-            for r in c.execute(
-                "SELECT id,question,created FROM history ORDER BY created DESC,rowid DESC LIMIT 50"
-            )
-        ]
+    return get_store().history()
 
 
 @app.get("/api/history/{hid}")
 def history_item(hid: str):
-    with db() as c:
-        row = c.execute("SELECT result FROM history WHERE id=?", (hid,)).fetchone()
-    if not row:
+    result = get_store().answer(hid)
+    if result is None:
         raise HTTPException(404, "Answer not found.")
-    return json.loads(row[0])
+    return result
 
 
 DIST = ROOT / "web" / "dist"
