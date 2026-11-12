@@ -1,5 +1,5 @@
 -- Run once in the Supabase SQL editor. Only the backend service role can access these objects.
-begin;
+begin read write;
 create table if not exists public.tp_papers (
  id text primary key, name text not null, kind text not null check(kind in ('pdf','docx')),
  size bigint not null, digest text not null unique,

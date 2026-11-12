@@ -241,3 +241,18 @@ def test_supabase_configuration_does_not_silently_fall_back(monkeypatch, tmp_pat
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     with pytest.raises(RuntimeError, match="requires SUPABASE_URL"):
         SupabaseStore(tmp_path)
+
+
+def test_migration_explicitly_requests_writes_when_session_defaults_read_only(hosted):
+    # Reproduce the provider's failure without changing the database-wide defaults.
+    before = sql(
+        "set default_transaction_read_only=on; begin; create table public.readonly_regression_probe(id integer);",
+        check=False,
+    )
+    assert before.returncode != 0 and "read-only transaction" in before.stderr
+    migration = (
+        Path(__file__).resolve().parents[1] / "supabase/migrations/001_tracepaper.sql"
+    ).read_text()
+    after = sql("set default_transaction_read_only=on;\n" + migration, check=False)
+    assert after.returncode == 0, after.stderr
+    assert json.loads(sql("select public.tp_health();").stdout)["ready"]
