@@ -1,0 +1,51 @@
+name: Deploy TracePaper
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tracepaper-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      TRACEPAPER_PASSWORD: ${{ secrets.TRACEPAPER_PASSWORD }}
+      HF_NAMESPACE: ${{ vars.HF_NAMESPACE || 'anerudh10' }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL || 'https://rmsulvaudvvydhjbhers.supabase.co' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check required repository secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in HF_TOKEN SUPABASE_ACCESS_TOKEN TRACEPAPER_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Add the repository secret $name under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Install deployment tools
+        run: python -m pip install -r requirements-deploy.txt
+      - name: Validate deployment package
+        run: python scripts/deploy_space.py --namespace "$HF_NAMESPACE" --supabase-url "$SUPABASE_URL" --dry-run
+      - name: Deploy free CPU Space and durable storage
+        run: python scripts/deploy_space.py --namespace "$HF_NAMESPACE" --supabase-url "$SUPABASE_URL"
+      - name: Verify live site and persistence
+        run: python scripts/verify_deployment.py --namespace "$HF_NAMESPACE" --restart
+      - name: Publish deployment result
+        if: success()
+        shell: bash
+        run: |
+          echo "### TracePaper deployment verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "Space: https://huggingface.co/spaces/${HF_NAMESPACE}/tracepaper" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verified HTTPS health, password protection, durable storage, upload, retrieval, PDF citations, history and restart persistence. Live AI calls require a visitor key and were not tested." >> "$GITHUB_STEP_SUMMARY"

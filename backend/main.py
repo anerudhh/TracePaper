@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.getenv("TRACEPAPER_DATA", str(ROOT / "data")))
 DATA.mkdir(parents=True, exist_ok=True)
 POOL = ThreadPoolExecutor(max_workers=1)
+INSTANCE_ID = uuid.uuid4().hex
 STOP = set(
     "a an the is are was were how what why when where which does do did of to in on for and or with from can could about explain tell me this that papers paper".split()
 )
@@ -228,7 +229,7 @@ def health():
         get_store().health()
     except (sqlite3.Error, HTTPException, RuntimeError):
         return JSONResponse({"status": "unavailable"}, status_code=503)
-    return {"status": "ok"}
+    return {"status": "ok", "instance_id": INSTANCE_ID}
 
 
 def generation_model(provider):

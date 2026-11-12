@@ -46,7 +46,7 @@ This provides separate per-tab credentials, **not user accounts or private per-u
 
 ## Deploy
 
-For the free Hugging Face + Supabase setup, follow [the free deployment guide](docs/free-deployment.md). This mode keeps originals, passages, and history in Supabase; a sleeping or restarted container does not own the only copy. Local SQLite remains available for development and persistent-volume deployments. The Docker image runs as UID 1000 for Spaces compatibility.
+For the free Hugging Face + Supabase setup, follow [the free deployment guide](docs/free-deployment.md). You can add credentials in GitHub **Settings → Secrets and variables → Actions** and run **Actions → Deploy TracePaper**, without entering credentials in Codex environment settings. This mode keeps originals, passages, and history in Supabase; a sleeping or restarted container does not own the only copy. Local SQLite remains available for development and persistent-volume deployments. The Docker image runs as UID 1000 for Spaces compatibility.
 
 
 `render.yaml` defines a single Docker web service with a persistent 10 GB disk and a generated library password. Connect this repository in Render and create a Blueprint, or use [Deploy to Render](https://render.com/deploy?repo=https://github.com/anerudhh/TracePaper). Review its paid service/disk pricing before deploying. No provider secret is needed at deployment; each visitor enters their own key in the app. Retrieve the generated library password from the provider's environment settings. Do not expose it in your resume or repository.

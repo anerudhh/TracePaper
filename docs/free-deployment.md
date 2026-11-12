@@ -2,7 +2,18 @@
 
 The site runs in a **Hugging Face Docker Space on CPU Basic**. Supabase holds its documents, indexed passages, upload status, deletion cleanup queue, and answer history. The container's local `/data` directory is a temporary parser workspace, not the source of truth in hosted mode. No GPU, paid Hugging Face volume, or plan upgrade is requested. Provider free-tier availability and quotas still apply; free accounts can sleep or pause when idle.
 
-## Secure deployment credentials
+## Deploy using GitHub repository secrets (recommended)
+
+No Codex environment-settings fields are required for this route.
+
+1. Open [TracePaper repository secrets](https://github.com/anerudhh/TracePaper/settings/secrets/actions).
+2. Click **New repository secret** three times, adding `HF_TOKEN` (a Hugging Face write token), `SUPABASE_ACCESS_TOKEN` (a Supabase account access token), and `TRACEPAPER_PASSWORD` (your chosen site password). Store values there, not in chat or source.
+3. Open **Actions → Deploy TracePaper → Run workflow**, select `main`, and run it. The workflow uses the supplied Hugging Face account and Supabase URL by default. Optional repository variables `HF_NAMESPACE` and `SUPABASE_URL` override those targets.
+4. The workflow installs the app-scoped Supabase schema, uploads the free CPU Space, waits for its build, verifies password protection/upload/retrieval/PDF citations/history, restarts the Space, and requires a new process ID before checking persistence. It removes its own uniquely named sample. A successful run publishes a deployment summary with the Space link. No model call is made.
+
+Only a manual run on `main` can execute this workflow; pull requests cannot trigger its deployment job. It does not request paid hardware or volumes. The repository needs GitHub Actions enabled and sufficient runner quota. If a workflow step fails, it does not report deployment success.
+
+## Secure deployment credentials for the CLI alternative
 
 The deployment helper needs a Hugging Face **write** token (`HF_TOKEN`), a Supabase personal access token (`SUPABASE_ACCESS_TOKEN`), and an owner-chosen `TRACEPAPER_PASSWORD`. Set these in secure environment settings or your local process environment, never in source or chat. Use [Hugging Face token settings](https://huggingface.co/settings/tokens) and [Supabase account token settings](https://supabase.com/dashboard/account/tokens). The Supabase dashboard project link contains the project ref; the app API URL is `https://<project-ref>.supabase.co`.
 
